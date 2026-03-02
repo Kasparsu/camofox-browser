@@ -4,6 +4,8 @@ import fs from 'node:fs';
 import { type ChildProcess, spawn } from 'node:child_process';
 
 import { launchOptions } from 'camoufox-js';
+import { generateFingerprint } from 'camoufox-js/dist/fingerprints.js';
+import { type Fingerprint } from 'fingerprint-generator';
 import { firefox, type BrowserContext, type BrowserContextOptions } from 'playwright-core';
 
 import { loadConfig } from '../utils/config';
@@ -240,6 +242,34 @@ export class ContextPool {
 		});
 
 		try {
+			const fpPath = path.join(profileDir, 'fingerprint.json');
+			let fingerprint: Fingerprint | undefined;
+
+			if (fs.existsSync(fpPath)) {
+				try {
+					const parsed = JSON.parse(fs.readFileSync(fpPath, 'utf-8'));
+					if (parsed && typeof parsed === 'object') {
+						fingerprint = parsed as Fingerprint;
+						log('info', 'loaded persisted fingerprint', { userId, fpPath });
+					} else {
+						log('warn', 'persisted fingerprint is invalid, regenerating', { userId, fpPath });
+					}
+				} catch {
+					log('warn', 'failed to read persisted fingerprint, regenerating', { userId, fpPath });
+				}
+			}
+
+			if (!fingerprint) {
+				fingerprint = generateFingerprint(undefined, { operatingSystems: [hostOS] });
+				try {
+					fs.mkdirSync(path.dirname(fpPath), { recursive: true });
+					fs.writeFileSync(fpPath, JSON.stringify(fingerprint, null, 2), 'utf-8');
+					log('info', 'generated new fingerprint and persisted it', { userId, fpPath });
+				} catch {
+					log('warn', 'generated new fingerprint but failed to persist it', { userId, fpPath });
+				}
+			}
+
 			const opts = await launchOptions({
 				headless: effectiveHeadless,
 				...(virtualDisplay ? { virtual_display: virtualDisplay.get() } : {}),
@@ -248,6 +278,7 @@ export class ContextPool {
 				enable_cache: true,
 				proxy: proxy ?? undefined,
 				geoip: !!proxy,
+				fingerprint,
 			});
 
 			const persistentOptions: PersistentContextOptions = {
