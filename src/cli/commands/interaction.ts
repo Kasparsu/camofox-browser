@@ -5,6 +5,7 @@ import { resolveTabId } from '../utils/session-resolver';
 import { HttpError } from '../transport/http';
 import type { CliContext } from '../types';
 import { apiRequestWithFallback } from '../utils/api-fallback';
+import { toElementTarget } from '../utils/selector';
 
 type FormPair = { ref: string; value: string };
 
@@ -156,7 +157,7 @@ export function registerInteractionCommands(program: Command, context: CliContex
 
 	program
 		.command('select')
-		.argument('<ref>', 'element ref like [e5] or CSS selector')
+		.argument('<ref>', 'element ref like e5 or CSS selector')
 		.argument('<value>', 'option value/label to select')
 		.argument('[tabId]', 'tab id (defaults to active tab)')
 		.option('--user <user>', 'user id')
@@ -164,7 +165,8 @@ export function registerInteractionCommands(program: Command, context: CliContex
 			try {
 				const userId = resolveCommandUser({ command, user: options.user });
 				const tabId = requireTabId(resolveTabId({ tabId: tabIdArg }), options);
-				const body = { tabId, userId, ref, value };
+				const target = toElementTarget(ref);
+				const body = { tabId, userId, ...target, value };
 
 				try {
 					await apiRequestWithFallback(context.getTransport(), '/api/select-option', '/select-option', body);
@@ -176,7 +178,7 @@ export function registerInteractionCommands(program: Command, context: CliContex
 						kind: 'type',
 						targetId: tabId,
 						userId,
-						ref,
+						...target,
 						text: value,
 					});
 				}
@@ -189,14 +191,15 @@ export function registerInteractionCommands(program: Command, context: CliContex
 
 	program
 		.command('hover')
-		.argument('<ref>', 'element ref like [e5] or CSS selector')
+		.argument('<ref>', 'element ref like e5 or CSS selector')
 		.argument('[tabId]', 'tab id (defaults to active tab)')
 		.option('--user <user>', 'user id')
 		.action(async (ref: string, tabIdArg: string | undefined, options: { user?: string }, command: Command) => {
 			try {
 				const userId = resolveCommandUser({ command, user: options.user });
 				const tabId = requireTabId(resolveTabId({ tabId: tabIdArg }), options);
-				const body = { tabId, userId, ref };
+				const target = toElementTarget(ref);
+				const body = { tabId, userId, ...target };
 
 				try {
 					await apiRequestWithFallback(context.getTransport(), '/api/hover', '/hover', body);
@@ -208,7 +211,7 @@ export function registerInteractionCommands(program: Command, context: CliContex
 						kind: 'hover',
 						targetId: tabId,
 						userId,
-						ref,
+						...target,
 					});
 				}
 

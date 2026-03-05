@@ -2,6 +2,7 @@ import { Command } from 'commander';
 
 import { resolveCommandUser, requireTabId } from '../utils/command-helpers';
 import { clearActiveTabId, resolveTabId, writeActiveTabId } from '../utils/session-resolver';
+import { toElementTarget } from '../utils/selector';
 import { HttpError } from '../transport/http';
 import type { CliContext } from '../types';
 
@@ -132,18 +133,19 @@ export function registerCoreCommands(program: Command, context: CliContext): voi
 	program
 		.command('click')
 		.description('Click element by ref or selector')
-		.argument('<ref>', 'element ref like [e5] or CSS selector')
+		.argument('<ref>', 'element ref like e5 or CSS selector')
 		.argument('[tabId]', 'tab id (defaults to active tab)')
 		.option('--user <user>', 'user id')
 		.action(async (ref: string, tabIdArg: string | undefined, options: { user?: string }, command: Command) => {
 			try {
 				const userId = resolveCommandUser({ command, user: options.user });
 				const tabId = requireTabId(resolveTabId({ tabId: tabIdArg }), options);
+				const target = toElementTarget(ref);
 				try {
 					await context.getTransport().post('/api/click', {
 						tabId,
 						userId,
-						ref,
+						...target,
 					});
 				} catch (error) {
 					if (!(error instanceof HttpError) || error.status !== 404) {
@@ -151,7 +153,7 @@ export function registerCoreCommands(program: Command, context: CliContext): voi
 					}
 					await context.getTransport().post(`/tabs/${encodeURIComponent(tabId)}/click`, {
 						userId,
-						ref,
+						...target,
 					});
 				}
 				context.print(command, { ok: true });
@@ -163,7 +165,7 @@ export function registerCoreCommands(program: Command, context: CliContext): voi
 	program
 		.command('type')
 		.description('Type text into element')
-		.argument('<ref>', 'element ref like [e5] or CSS selector')
+		.argument('<ref>', 'element ref like e5 or CSS selector')
 		.argument('<text>', 'text to type')
 		.argument('[tabId]', 'tab id (defaults to active tab)')
 		.option('--user <user>', 'user id')
@@ -171,11 +173,12 @@ export function registerCoreCommands(program: Command, context: CliContext): voi
 			try {
 				const userId = resolveCommandUser({ command, user: options.user });
 				const tabId = requireTabId(resolveTabId({ tabId: tabIdArg }), options);
+				const target = toElementTarget(ref);
 				try {
 					await context.getTransport().post('/api/type', {
 						tabId,
 						userId,
-						ref,
+						...target,
 						text,
 					});
 				} catch (error) {
@@ -184,7 +187,7 @@ export function registerCoreCommands(program: Command, context: CliContext): voi
 					}
 					await context.getTransport().post(`/tabs/${encodeURIComponent(tabId)}/type`, {
 						userId,
-						ref,
+						...target,
 						text,
 					});
 				}

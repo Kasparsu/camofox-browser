@@ -90,8 +90,11 @@ export class HttpTransport {
 		const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 		timeoutId.unref();
 
+		const apiKey = process.env.CAMOFOX_API_KEY;
+
 		const headers: Record<string, string> = {
 			'content-type': 'application/json',
+			...(apiKey ? { authorization: `Bearer ${apiKey}` } : {}),
 			...(options?.headers ?? {}),
 		};
 

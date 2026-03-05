@@ -1,3 +1,13 @@
+## v2.0.2 (2026-03-05)
+
+### Bug Fixes
+- **CLI:** Fixed 8+ commands failing with "Forbidden" — HTTP transport now sends `Authorization: Bearer` header from `CAMOFOX_API_KEY` environment variable.
+- **CLI:** Fixed CSS selector support in `click`, `type`, `select`, `hover` commands — selectors like `mat-icon[fonticon="download"]` now correctly route to server's selector path instead of being treated as refs.
+- **CLI:** Fixed misleading help text — element ref notation corrected from `[e5]` to `e5`.
+
+### New
+- Added `src/cli/utils/selector.ts` — shared selector detection utility for element-targeting commands.
+
 ## v2.0.1 (2026-03-05)
 
 ### Bug Fixes
