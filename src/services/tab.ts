@@ -1,5 +1,6 @@
 import type { Locator, Page } from 'playwright-core';
 
+import { isElementRef as isSelectorElementRef } from '../cli/utils/selector';
 import { expandMacro } from '../utils/macros';
 import type {
 	ConsoleEntry,
@@ -14,8 +15,7 @@ import { log } from '../middleware/logging';
 
 const ALLOWED_URL_SCHEMES: ReadonlyArray<'http:' | 'https:'> = ['http:', 'https:'];
 
-// Interactive roles to include - exclude combobox to avoid opening complex widgets
-// (date pickers, dropdowns) that can interfere with navigation
+// Selective set of actionable roles worth indexing as refs.
 const INTERACTIVE_ROLES: ReadonlyArray<string> = [
 	'button',
 	'link',
@@ -28,13 +28,27 @@ const INTERACTIVE_ROLES: ReadonlyArray<string> = [
 	'slider',
 	'spinbutton',
 	'switch',
-	// 'combobox' excluded - can trigger date pickers and complex dropdowns
+	'combobox',
+	'listbox',
+	'option',
+	'select',
+	'dialog',
+	'alertdialog',
+	'gridcell',
+	'treeitem',
 ];
 
 // Patterns to skip (date pickers, calendar widgets)
 const SKIP_PATTERNS: ReadonlyArray<RegExp> = [/date/i, /calendar/i, /picker/i, /datepicker/i];
 
-const MAX_SNAPSHOT_NODES = 500;
+const DEFAULT_MAX_SNAPSHOT_NODES = 2000;
+const parsedMaxSnapshotNodes = Number.parseInt(
+	process.env.CAMOFOX_MAX_SNAPSHOT_NODES || String(DEFAULT_MAX_SNAPSHOT_NODES),
+	10,
+);
+const MAX_SNAPSHOT_NODES = Number.isFinite(parsedMaxSnapshotNodes) && parsedMaxSnapshotNodes > 0
+	? parsedMaxSnapshotNodes
+	: DEFAULT_MAX_SNAPSHOT_NODES;
 
 const MAX_EVAL_TIMEOUT = 300000;
 const DEFAULT_EVAL_TIMEOUT = 5000;
@@ -170,7 +184,6 @@ export function annotateAriaYamlWithRefs(ariaYaml: string | null, refs: Map<stri
 			const [, prefix, role, nameMatch, name, suffix] = match;
 			const normalizedRole = role.toLowerCase();
 
-			if (normalizedRole === 'combobox') return line;
 			if (name && SKIP_PATTERNS.some((p) => p.test(name))) return line;
 			if (!INTERACTIVE_ROLES.includes(normalizedRole)) return line;
 
@@ -291,28 +304,23 @@ export async function dismissConsentDialogs(page: Page): Promise<void> {
 }
 
 export async function buildRefs(page: Page): Promise<Map<string, RefInfo>> {
-	const refs = new Map<string, RefInfo>();
-
 	if (!page || page.isClosed()) {
 		log('warn', 'buildRefs: page closed or invalid');
-		return refs;
+		return new Map<string, RefInfo>();
 	}
 
-	await waitForPageReady(page, { waitForNetwork: false });
-
-	let ariaYaml: string | null;
-	try {
-		ariaYaml = await page.locator('body').ariaSnapshot({ timeout: 10000 });
-	} catch {
-		log('warn', 'ariaSnapshot failed, retrying');
-		await page.waitForLoadState('load', { timeout: 5000 }).catch(() => {});
-		ariaYaml = await page.locator('body').ariaSnapshot({ timeout: 10000 });
-	}
-
+	const ariaYaml = await getAriaSnapshot(page);
 	if (!ariaYaml) {
 		log('warn', 'buildRefs: no aria snapshot');
-		return refs;
+		return new Map<string, RefInfo>();
 	}
+
+	return buildRefsFromAriaSnapshot(ariaYaml);
+}
+
+export function buildRefsFromAriaSnapshot(ariaYaml: string | null): Map<string, RefInfo> {
+	const refs = new Map<string, RefInfo>();
+	if (!ariaYaml) return refs;
 
 	const lines = ariaYaml.split('\n');
 	let refCounter = 1;
@@ -325,7 +333,6 @@ export async function buildRefs(page: Page): Promise<Map<string, RefInfo>> {
 		if (match) {
 			const [, role, name] = match;
 			const normalizedRole = role.toLowerCase();
-			if (normalizedRole === 'combobox') continue;
 			if (name && SKIP_PATTERNS.some((p) => p.test(name))) continue;
 
 			if (INTERACTIVE_ROLES.includes(normalizedRole)) {
@@ -347,17 +354,36 @@ export async function buildRefs(page: Page): Promise<Map<string, RefInfo>> {
 export async function getAriaSnapshot(page: Page): Promise<string | null> {
 	if (!page || page.isClosed()) return null;
 	await waitForPageReady(page, { waitForNetwork: false });
-	return page.locator('body').ariaSnapshot({ timeout: 10000 });
+	try {
+		return await page.locator('body').ariaSnapshot({ timeout: 10000 });
+	} catch {
+		log('warn', 'ariaSnapshot failed, retrying');
+		await page.waitForLoadState('load', { timeout: 5000 }).catch(() => {});
+		return page.locator('body').ariaSnapshot({ timeout: 10000 });
+	}
 }
 
-export function refToLocator(page: Page, ref: string, refs: Map<string, RefInfo>): Locator | null {
+export function isElementRef(target: string): boolean {
+	return isSelectorElementRef(target);
+}
+
+function toLocatorRole(role: string): string {
+	return role === 'select' ? 'combobox' : role;
+}
+
+export async function refToLocator(page: Page, ref: string, refs: Map<string, RefInfo>): Promise<Locator | null> {
 	const info = refs.get(ref);
 	if (!info) return null;
 
 	const { role, name, nth } = info;
-	let locator = page.getByRole(role as never, name ? ({ name } as never) : undefined);
-	locator = locator.nth(nth);
-	return locator;
+	const locator = page.getByRole(toLocatorRole(role) as never, name ? ({ name } as never) : undefined);
+	const count = await locator.count();
+	if (count <= nth) {
+		const err = new Error(`Ref ${ref} may be stale - snapshot again for fresh refs`);
+		(err as Error & { statusCode?: number }).statusCode = 400;
+		throw err;
+	}
+	return locator.nth(nth);
 }
 
 function attachConsoleListeners(state: TabState): void {
@@ -460,8 +486,8 @@ export async function navigateTab(tabId: string, tabState: TabState, params: { u
 }
 
 export async function snapshotTab(tabState: TabState): Promise<{ url: string; snapshot: string; refsCount: number }>{
-	tabState.refs = await buildRefs(tabState.page);
 	const ariaYaml = await getAriaSnapshot(tabState.page);
+	tabState.refs = buildRefsFromAriaSnapshot(ariaYaml);
 	const annotatedYaml = annotateAriaYamlWithRefs(ariaYaml, tabState.refs);
 	return {
 		url: tabState.page.url(),
@@ -521,7 +547,7 @@ export async function clickTab(tabId: string, tabState: TabState, params: { ref?
 		};
 
 		if (ref) {
-			const locator = refToLocator(tabState.page, ref, tabState.refs);
+			const locator = await refToLocator(tabState.page, ref, tabState.refs);
 			if (!locator) {
 				const maxRef = tabState.refs.size > 0 ? `e${tabState.refs.size}` : 'none';
 				throw new Error(
@@ -632,7 +658,7 @@ export async function typeTab(tabId: string, tabState: TabState, params: { ref?:
 	await withTabLock(tabId, async () => {
 		let locator: Locator;
 		if (ref) {
-			const resolved = refToLocator(tabState.page, ref, tabState.refs);
+			const resolved = await refToLocator(tabState.page, ref, tabState.refs);
 			if (!resolved) throw new Error(`Unknown ref: ${ref}`);
 			locator = resolved;
 		} else {
@@ -677,7 +703,7 @@ export async function scrollElementTab(
 
 		let locator: Locator;
 		if (ref) {
-			const resolved = refToLocator(page, ref, tabState.refs);
+			const resolved = await refToLocator(page, ref, tabState.refs);
 			if (!resolved) {
 				const maxRef = tabState.refs.size > 0 ? `e${tabState.refs.size}` : 'none';
 				const err = new Error(
@@ -689,13 +715,12 @@ export async function scrollElementTab(
 			locator = resolved;
 		} else {
 			locator = page.locator(selector as string);
-		}
-
-		const count = await locator.count();
-		if (count === 0) {
-			const err = new Error(`Element not found: ${ref || selector}`);
-			(err as Error & { statusCode?: number }).statusCode = 400;
-			throw err;
+			const count = await locator.count();
+			if (count === 0) {
+				const err = new Error(`Element not found: ${selector}`);
+				(err as Error & { statusCode?: number }).statusCode = 400;
+				throw err;
+			}
 		}
 
 		const element = locator.first();

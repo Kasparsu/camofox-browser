@@ -1,9 +1,13 @@
-const SELECTOR_HINT_PATTERN = /[.#\[\]:>~+*=|^$]/;
+const ELEMENT_REF_PATTERN = /^e\d+$/;
+
+export function isElementRef(input: string): boolean {
+	return ELEMENT_REF_PATTERN.test(input);
+}
 
 export function isSelector(input: string): boolean {
-	return SELECTOR_HINT_PATTERN.test(input) || input.includes(' ');
+	return !isElementRef(input);
 }
 
 export function toElementTarget(input: string): { selector: string } | { ref: string } {
-	return isSelector(input) ? { selector: input } : { ref: input };
+	return isElementRef(input) ? { ref: input } : { selector: input };
 }

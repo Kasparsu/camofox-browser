@@ -25,12 +25,11 @@ import {
 	withUserLimit,
 } from '../services/session';
 import {
-	annotateAriaYamlWithRefs,
 	buildRefs,
 	createTabState,
-	getAriaSnapshot,
 	refToLocator,
 	safePageClose,
+	snapshotTab,
 	smartFill,
 	validateUrl,
 	withTabLock,
@@ -218,16 +217,7 @@ router.get('/snapshot', async (req: Request<unknown, unknown, unknown, { targetI
 		const { tabState } = found;
 		tabState.toolCalls++;
 
-		const result = await withTimeout(
-			(async () => {
-				tabState.refs = await buildRefs(tabState.page);
-				const ariaYaml = await getAriaSnapshot(tabState.page);
-				const annotatedYaml = annotateAriaYamlWithRefs(ariaYaml, tabState.refs);
-				return { url: tabState.page.url(), snapshot: annotatedYaml, refsCount: tabState.refs.size };
-			})(),
-			CONFIG.handlerTimeoutMs,
-			'openclaw-snapshot',
-		);
+		const result = await withTimeout(snapshotTab(tabState), CONFIG.handlerTimeoutMs, 'openclaw-snapshot');
 
 		return res.json({
 			ok: true,
@@ -342,7 +332,7 @@ router.post('/act', async (req: Request<unknown, unknown, Record<string, unknown
 					};
 
 					if (ref) {
-						const locator = refToLocator(tabState.page, ref, tabState.refs);
+						const locator = await refToLocator(tabState.page, ref, tabState.refs);
 						if (!locator) throw new Error(`Unknown ref: ${ref}`);
 						await doClick(locator);
 					} else {
@@ -365,7 +355,7 @@ router.post('/act', async (req: Request<unknown, unknown, Record<string, unknown
 					}
 
 					if (ref) {
-						const locator = refToLocator(tabState.page, ref, tabState.refs);
+						const locator = await refToLocator(tabState.page, ref, tabState.refs);
 						if (!locator) throw new Error(`Unknown ref: ${ref}`);
 						await smartFill(locator, tabState.page, text);
 						if (submit) await tabState.page.keyboard.press('Enter');
@@ -388,7 +378,7 @@ router.post('/act', async (req: Request<unknown, unknown, Record<string, unknown
 					}
 
 					if (ref) {
-						const locator = refToLocator(tabState.page, ref, tabState.refs);
+						const locator = await refToLocator(tabState.page, ref, tabState.refs);
 						if (!locator) throw new Error(`Unknown ref: ${ref}`);
 						await locator.selectOption(value);
 					} else {
@@ -412,7 +402,7 @@ router.post('/act', async (req: Request<unknown, unknown, Record<string, unknown
 					const direction = params.direction ?? 'down';
 					const amount = params.amount ?? 500;
 					if (ref) {
-						const locator = refToLocator(tabState.page, ref, tabState.refs);
+						const locator = await refToLocator(tabState.page, ref, tabState.refs);
 						if (!locator) throw new Error(`Unknown ref: ${ref}`);
 						await locator.scrollIntoViewIfNeeded({ timeout: 5000 });
 					} else {
@@ -428,7 +418,7 @@ router.post('/act', async (req: Request<unknown, unknown, Record<string, unknown
 					const { ref, selector } = params;
 					if (!ref && !selector) throw new Error('ref or selector required');
 					if (ref) {
-						const locator = refToLocator(tabState.page, ref, tabState.refs);
+						const locator = await refToLocator(tabState.page, ref, tabState.refs);
 						if (!locator) throw new Error(`Unknown ref: ${ref}`);
 						await locator.hover({ timeout: 5000 });
 					} else {
@@ -474,8 +464,10 @@ router.post('/act', async (req: Request<unknown, unknown, Record<string, unknown
 		return res.json(result);
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);
+		const statusCode = (err as { statusCode?: number } | null)?.statusCode;
 		const kindFromBody = typeof (req.body as { kind?: unknown }).kind === 'string' ? (req.body as { kind?: unknown }).kind : undefined;
 		log('error', 'act failed', { reqId: req.reqId, kind: kindFromBody, error: message });
+		if (statusCode === 400) return res.status(400).json({ error: message });
 		return res.status(500).json({ error: safeError(err) });
 	}
 });
